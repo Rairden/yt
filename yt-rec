@@ -1,0 +1,28 @@
+#!/bin/bash
+
+#https://docs.kde.org/trunk5/en/konsole/konsole/command-line-options.html
+
+# Run with `yt-rec && exit`. ytPath is an env var. Where you want files saved.
+
+saveDir="$ytPath"
+tabsFromFile="/run/media/erik/storage/vuze/megaDL/konsole.txt"
+
+cmd=$1
+cmd=${cmd:-yt }
+
+fromFile() {
+	konsole -p tabtitle='yt' --separate --tabs-from-file "$tabsFromFile" &
+}
+
+if ! pgrep -f "alacritty.*--title yt" > /dev/null; then
+	alacritty --config-file ~/scratch/alacritty-yt.yml --title yt --command /bin/bash -c 'watch -d "yt -r; echo; yt -s"' &
+fi
+
+for ((i = 1; i <= 21; i++)); do
+	konsole -p tabtitle="ch$i" --workdir="$saveDir" --new-tab -e "bash -c 'xdotool type \"$cmd\" && exec zsh'"
+done
+
+konsole -p tabtitle="vidinfo" --workdir="$saveDir" --new-tab -e "bash -c 'xdotool type \"vidinfo \" && exec zsh'"
+konsole -p tabtitle="yt --swap" --workdir="$saveDir" --new-tab -e "bash -c 'xdotool type \"yt --swap\" && exec zsh'"
+konsole -p tabtitle="yt -p" --workdir="$saveDir" --new-tab -e "bash -c 'xdotool type \"yt -p\" && exec zsh'"
+konsole -p tabtitle='yt' --workdir="$saveDir" --new-tab -e "bash -c 'exit'"

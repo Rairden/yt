@@ -1,0 +1,43 @@
+#!/bin/bash
+
+source "$HOME"/.scripts/std 2>/dev/null
+
+script=$(basename "$0")
+log=/tmp/ytmonitor.log
+pidToMonitor=$1
+prevState=
+trapTriggered=0
+url=$(ps -o args= -p "$pidToMonitor" | awk '{print $NF}')
+
+logState() {
+	local pid=$1
+	local state=$2
+	date=$(date '+%Y-%m-%d %H:%M:%S')
+	printf "%s  PID  %7s  %-9s  %s\n" "$date" "$pid" "$state" "$url" >> "$log"
+}
+
+trap 'logState $pidToMonitor killed; trapTriggered=1; exit' USR1
+
+abbrev=${script:0:15}
+cnt=$(pgrep -c "$abbrev")
+
+if ((cnt <= 1)); then
+	rm -f "$log"
+fi
+
+while kill -0 "$pidToMonitor" 2> /dev/null; do
+	currState=$(ps -o stat= -p "$pidToMonitor")
+
+	if [[ $currState == T && $prevState != T ]]; then
+		logState "$pidToMonitor" suspended
+	elif [[ $currState != T && ( -z $prevState || $prevState == T ) ]]; then
+		logState "$pidToMonitor" running
+	fi
+
+	prevState="$currState"
+	sleep 0.5
+done
+
+if [[ $trapTriggered == 0 ]]; then
+	logState "$pidToMonitor" killed
+fi

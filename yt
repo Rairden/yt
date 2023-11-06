@@ -1,0 +1,311 @@
+#!/bin/bash
+
+source "$HOME"/.scripts/std 2>/dev/null
+
+script="$(basename "$0")"
+url=
+youtube_dl=true
+ytdlp=false
+best=false
+logfile=$HOME/scratch/yt.log
+log=/tmp/ytmonitor.log
+startTime=$(($(date +%s%N)/1000000))
+
+usage() {
+	cat <<-DOC
+	Usage: $script [OPTIONS] [-b FILE] [url]
+
+	Download live streams from youtube, twitch, etc.
+
+	yt-dlp is the default for youtube urls.
+
+	youtube_dl is the default for live streams.
+        If you get a 403 forbidden, login with a web browser and use $script -c <url>
+
+	Options:
+        -s, --suspended         show suspended processes
+        -r, --recent            lists the two most recently suspended and running process
+        -k, --killall           kill all suspended processes
+        -f, --forcekill         kill all processes w/out prompting
+        -p, --pauseall          pause all running processes
+        -g, --grep              search for running processes
+        -c, --cookies           use cookies with a web browser (CAPTCHA, or login required)
+        -b, --batch-file FILE   file containing URLs to download
+            --recent-pids       returns two pids [recentRunning recentSuspend]
+            --best              run yt-dlp as default (best quality)
+            --swap              swaps the most recently suspended and running process
+DOC
+}
+
+# gets elapsed time in milliseconds (since start of script)
+elapsedTime() {
+	local currTime=$(($(date +%s%N)/1000000))
+	local elapsed=$((currTime - startTime))
+	printf "%s" "$elapsed"
+}
+
+log() {
+	elapsed=$(elapsedTime)
+
+	local minutes=$((elapsed / 60000))
+	local seconds=$(((elapsed % 60000) / 1000))
+	mmss=$(printf "%02d:%02d" "$minutes" "$seconds")
+
+	str=$(printf "%25s    %7s  %s  %10s  %s" "$(date --iso-8601=seconds)" "$elapsed" "$mmss" "yt-dlp" "$url")
+	$youtube_dl && str=${str/    yt-dlp/youtube-dl}
+
+	if [[ ! -f $logfile ]]; then
+		printf "# Measuring the time taken by --get-filename to initiate the download.\n" > "$logfile"
+		printf "# While yt-dlp has a faster download speed, youtube-dl is quicker to start and terminate.\n\n" >> "$logfile"
+		printf "%25s    %7s  mm:ss  %10s  url\n" "datetime" "ms" "binary" >> "$logfile"
+	fi
+
+	printf "%s\n" "$str" >> "$logfile"
+}
+
+isYoutubeURL() {
+	url=$1
+	# https://regex101.com/r/vHEc61/1
+	validURL="^((?:https?:)?\/\/)?((?:www|m)\.)?((?:youtube(-nocookie)?\.com|youtu.be))(\/(?:[\w\-]+\?v=|embed\/|v\/)?)([\w\-]+)(\S+)?$"
+	echo "$url" | grep -Pq "$validURL"
+	return $?
+}
+
+formatFileName() {
+	local filename=$1
+	if $youtube_dl; then
+		prefix="${filename%-*}"
+	elif $ytdlp; then
+		prefix="${filename% *}"
+	fi
+
+	ext=${filename##*.}
+	file="${prefix}.${ext}"
+	echo "$file"
+}
+
+download() {
+	requireBinary youtube-dl || exit $?
+	filename=$(youtube-dl --get-filename "$url")
+	[ -z "$filename" ] && echo "filename not found" && exit 21
+	log
+
+	file=$(formatFileName "$filename")
+	printf "\033]30;%s\007" "${file:0:7}"	# rename Konsole tab
+
+	setsid suspended-monitor $$ &> /dev/null &
+	MONITOR_PID=$!
+	trap 'kill -USR1 $MONITOR_PID' EXIT
+
+	youtube-dl --retries 3 -o "$file" "$url" &> /dev/null
+}
+
+# login to website using a browser. Then paste your browser user-agent into here.
+useCookies() {
+	requireBinary yt-dlp || exit $?
+	userAgent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
+	filename=$(yt-dlp --cookies-from-browser chrome \
+		--user-agent "$userAgent" \
+		--get-filename "$url")
+	[ -z "$filename" ] && echo "filename not found" && exit 23
+	log
+
+	file=$(formatFileName "$filename")
+	printf "\033]30;%s\007" "${file:0:7}"	# rename Konsole tab
+	yt-dlp --cookies-from-browser chrome \
+		--user-agent "$userAgent" \
+		-o "$file" "$url" &> /dev/null
+}
+
+downloadWithQuality() {
+	if $best; then
+		yt-dlp "$url"
+	else
+		yt-dlp -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" "$url"
+	fi
+}
+
+batchDownload() {
+	requireBinary yt-dlp || exit $?
+	file=$1
+	if [[ ! -f $file ]]; then
+		echo "Error: File '$file' does not exist."
+		return 1
+	fi
+
+	while read -r url; do
+		[[ $url =~ ^# ]] && continue
+		downloadWithQuality
+	done < "$file" | sort -u
+}
+
+requireBinary() {
+	local binary line
+	binary=$1
+	if ! command -v "$binary" &> /dev/null; then
+		line=$(caller | awk '{print $1}')
+		echo "Error: $binary is not installed. Check line $line."
+		return 1
+	fi
+	return 0
+}
+
+getRecentProcessStates() {
+	declare -A killedPIDs
+	local recentRunning recentSuspend state
+
+	if [[ ! -f $log || $(wc -l < "$log") -lt 2 ]]; then
+		echo "Error: not enough log entries to perform swap."
+		return 1
+	fi
+
+	# 2023-10-16 12:24:11  PID     5677  running    https://site.com/name/
+	while read -r date _ _ pid state _; do
+		[[ $date =~ ^# ]] && continue
+
+		# Ignore this PID if it has been killed
+		if [[ -v killedPIDs[$pid] ]]; then
+			continue
+		fi
+
+		if [[ -z $recentRunning && $state == running && $pid -ne $recentSuspend ]]; then
+			recentRunning=$pid
+		elif [[ -z $recentSuspend && $state == suspended && $pid -ne $recentRunning ]]; then
+			recentSuspend=$pid
+		elif [[ $state == killed ]]; then
+			killedPIDs[$pid]=
+		fi
+
+		if [[ -n $recentRunning && -n $recentSuspend && $recentSuspend -ne $recentRunning ]]; then
+			# make sure the recently suspended at least exists
+			if ps -p "$recentSuspend" &> /dev/null; then
+				break
+			fi
+		fi
+	done < <(tac $log)
+
+	# Check if we have both running and suspended processes to swap
+	if [[ -z $recentSuspend || -z $recentRunning || $recentSuspend -eq $recentRunning ]]; then
+		echo "Error: Couldn't find both a unique suspended and running process."
+		return 1
+	fi
+
+	echo "$recentRunning $recentSuspend"
+}
+
+# Swaps the most recently suspended and running process
+swapActiveSuspended() {
+	local recentRunning recentSuspend
+
+	runningProcs=$(pgrep -afc "$script [^-]" -r S)
+	if ((runningProcs < 1)); then
+		echo "Error: at least 1 running process is required to perform a swap."
+		return 1
+	fi
+
+	read -r recentRunning recentSuspend <<< "$(getRecentProcessStates)"
+
+	suspendedProcessName=$(ps -p "$recentSuspend" -o args= | awk '{print $NF}')
+	runningProcessName=$(ps -p "$recentRunning" -o args= | awk '{print $NF}')
+
+	printf "%s\n" "Swapped processes. Now:"
+	printf "%23s  %7s  %s\n" "Suspended:" "$recentRunning" "$runningProcessName"
+	printf "%23s  %7s  %s\n" "Running:" "$recentSuspend" "$suspendedProcessName"
+
+	# Suspend the running process and resume the suspended process
+	kill -STOP "-$recentRunning"
+	kill -CONT "-$recentSuspend"
+}
+
+numProcs() {
+	pgrep -afc "$script [^-]"
+}
+
+if [ $# -lt 1 ]; then
+	echo "Try '$script -h' for more information."
+	exit 2
+fi
+
+while [ $# -gt 0 ]; do
+	case $1 in
+	-s | --suspended)
+		[[ $(numProcs) == 0 ]] && echo "No processes running."
+		ps -o pid=,user=,state=,args= -C "$script" | grep -v "yt -" | sort -k3,3 -k1,1n -b
+		exit
+		;;
+	-r | --recent)
+		read -r recentRunning recentSuspend <<< "$(getRecentProcessStates)"
+		suspendedProcessName=$(ps -p "$recentSuspend" -o args= 2>/dev/null | awk '{print $NF}')
+		runningProcessName=$(ps -p "$recentRunning" -o args= 2>/dev/null | awk '{print $NF}')
+		printf "%17s  %s\n" "recent Running:" "$runningProcessName"
+		printf "%17s  %s\n" "recent Suspended:" "$suspendedProcessName"
+		exit
+		;;
+	-k | --killall)
+		suspended-control -k "$script"
+		exit
+		;;
+	-f | --forcekill)
+		suspended-control -p "$script"
+		suspended-control -k "$script"
+		exit
+		;;
+	-p | --pauseall)
+		suspended-control -p "$script"
+		exit
+		;;
+	--swap)
+		swapActiveSuspended
+		exit
+		;;
+	-g | --grep)
+		regex=$2
+		if [[ -z $regex ]]; then
+			echo "Option $1 requires an argument."
+			exit 1
+		fi
+		yt -s | sort -k6 | grep -P "$regex"
+		exit
+		;;
+	-b | --batch-file)
+		path=$2
+		if [[ -z $path ]]; then
+			echo "Option $1 requires an argument."
+			exit 1
+		fi
+		batchDownload "$path"
+		exit
+		;;
+	--best)
+		best=true
+		;;
+	-c | --cookies)
+		ytdlp=true
+		youtube_dl=false
+		;;
+	-h | --help)
+		usage
+		exit
+		;;
+	--recent-pids)
+		getRecentProcessStates
+		exit
+		;;
+	*)
+		url=$1
+	esac
+	shift
+done
+
+if isYoutubeURL "$url"; then
+	requireBinary yt-dlp || exit $?
+	downloadWithQuality
+	exit
+fi
+
+if $ytdlp; then
+	useCookies "$url"
+	exit
+fi
+
+download "$url"

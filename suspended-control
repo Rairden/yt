@@ -1,0 +1,85 @@
+#!/bin/bash
+
+script="$(basename "$0")"
+action=$1	# -k for kill, -p for pause
+cmd=$2
+cmd=${cmd:0:15}
+
+pauseProcesses() {
+	if [[ $state = S ]]; then
+		printf "%12s %s\n" "-$pid" "$url"
+		kill -STOP "-$pid"
+	fi
+}
+
+killProcesses() {
+	if [[ $state = T ]]; then
+		printf "%12s %s\n" "-$pid" "$url"
+		kill -CONT "-$pid"
+		kill -INT "-$pid"
+	elif [[ $state = S ]]; then
+		read -r -p "Process is still running. Close it [yY]? " 0</dev/tty
+		if [[ $REPLY =~ [yY] ]]; then
+			echo "Killing process "
+			printf "%12s %s\n" "-$pid" "$url"
+			kill -INT "-$pid"
+		fi
+	fi
+}
+
+reportIncomplete() {
+	startTime=$(date +%s)
+	incomplete=true
+
+	# Check existence for incomplete files for 60 seconds
+	while (($(date +%s) - startTime < 60)); do
+		files=$(find . -maxdepth 1 -type f -name "*.part")
+		if [[ -z $files ]]; then
+			incomplete=false
+			break
+		fi
+	done
+
+	if $incomplete; then
+		echo -e "\nWarning, you have incomplete files. Try to manually kill these:\n"
+		find . -maxdepth 1 -type f -name "*.part"
+	else
+		echo -e "\nAll files closed successfully. You can close your terminal."
+	fi
+}
+
+if [ $# -ne 2 ]; then
+	echo "Exactly 2 arguments are required."
+	echo "Run either '$script -k <cmd>' or '$script -p <cmd>'."
+	exit 1
+fi
+
+numProcesses=$(pgrep -afc "$cmd [^-]")
+
+if ((numProcesses == 0)); then
+	echo "There are no processes to manage."
+	exit 1
+fi
+
+if [[ $action == -p ]]; then
+	runningProcs=$(pgrep -afc "$cmd [^-]" -r S)
+	if ((runningProcs == 0)); then
+		echo "There are no running processes to pause."
+		exit
+	fi
+	echo "Pausing processes..."
+elif [[ $action == -k ]]; then
+	echo "Killing processes..."
+fi
+
+while read -r pid state _ _ url; do
+	if [[ $action == -p ]]; then
+		pauseProcesses
+	elif [[ $action == -k ]]; then
+		killProcesses
+	fi
+done < <(pgrep -f "$cmd [^-]" | xargs ps -o pid=,state=,args= -p)
+
+if [[ $action == -k ]]; then
+	reportIncomplete
+fi
