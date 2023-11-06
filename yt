@@ -4,12 +4,17 @@ source "$HOME"/.scripts/std 2>/dev/null
 
 script="$(basename "$0")"
 url=
-youtube_dl=true
-ytdlp=false
 best=false
+cookies=false
 logfile=$HOME/scratch/yt.log
 log=/tmp/ytmonitor.log
 startTime=$(($(date +%s%N)/1000000))
+
+sanitizeFileName=(
+	"--replace-in-metadata" title '[\U00010000-\U0010ffff]' ''  # remove emojis (range 65,536 - 1,114,111)
+	"--replace-in-metadata" title "'" ''                        # remove single quotes
+	"--replace-in-metadata" title '^\s+|\s+$' ''                # trim whitespace before/after title
+)
 
 usage() {
 	cat <<-DOC
@@ -17,10 +22,7 @@ usage() {
 
 	Download live streams from youtube, twitch, etc.
 
-	yt-dlp is the default for youtube urls.
-
-	youtube_dl is the default for live streams.
-        If you get a 403 forbidden, login with a web browser and use $script -c <url>
+	If you get a 403 forbidden, login with a web browser and use $script -c <url>
 
 	Options:
         -s, --suspended         show suspended processes
@@ -52,7 +54,6 @@ log() {
 	mmss=$(printf "%02d:%02d" "$minutes" "$seconds")
 
 	str=$(printf "%25s    %7s  %s  %10s  %s" "$(date --iso-8601=seconds)" "$elapsed" "$mmss" "yt-dlp" "$url")
-	$youtube_dl && str=${str/    yt-dlp/youtube-dl}
 
 	if [[ ! -f $logfile ]]; then
 		printf "# Measuring the time taken by --get-filename to initiate the download.\n" > "$logfile"
@@ -71,62 +72,47 @@ isYoutubeURL() {
 	return $?
 }
 
-formatFileName() {
-	local filename=$1
-	if $youtube_dl; then
-		prefix="${filename%-*}"
-	elif $ytdlp; then
-		prefix="${filename% *}"
-	fi
-
-	ext=${filename##*.}
-	file="${prefix}.${ext}"
-	echo "$file"
+start() {
+	yt-dlp "$@" -o "%(title)s.%(ext)s" "$url" &>/dev/null
 }
 
 download() {
-	requireBinary youtube-dl || exit $?
-	filename=$(youtube-dl --get-filename "$url")
+	filename=$(yt-dlp --print filename -o "%(title)s.%(ext)s" "$url")
 	[ -z "$filename" ] && echo "filename not found" && exit 21
-	log
-
-	file=$(formatFileName "$filename")
-	printf "\033]30;%s\007" "${file:0:7}"	# rename Konsole tab
 
 	setsid suspended-monitor $$ &> /dev/null &
 	MONITOR_PID=$!
 	trap 'kill -USR1 $MONITOR_PID' EXIT
 
-	youtube-dl --retries 3 -o "$file" "$url" &> /dev/null
-}
+	local args=("${sanitizeFileName[@]}")
 
-# login to website using a browser. Then paste your browser user-agent into here.
-useCookies() {
-	requireBinary yt-dlp || exit $?
-	userAgent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
-	filename=$(yt-dlp --cookies-from-browser chrome \
-		--user-agent "$userAgent" \
-		--get-filename "$url")
-	[ -z "$filename" ] && echo "filename not found" && exit 23
+	if $cookies; then
+		# login to their website using a browser. Then paste your browser user-agent into here.
+		userAgent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
+		args+=('--cookies-from-browser' chrome '--user-agent' "$userAgent")
+		filename=$(yt-dlp "${args[@]}" --print filename "$url")
+		[ -z "$filename" ] && echo "filename not found" && exit 23
+	fi
+
 	log
-
-	file=$(formatFileName "$filename")
-	printf "\033]30;%s\007" "${file:0:7}"	# rename Konsole tab
-	yt-dlp --cookies-from-browser chrome \
-		--user-agent "$userAgent" \
-		-o "$file" "$url" &> /dev/null
+	printf "\033]30;%s\007" "${filename:0:7}"	# rename Konsole tab
+	start "${args[@]}"
 }
 
 downloadWithQuality() {
+	local args=("${sanitizeFileName[@]}")
+
 	if $best; then
-		yt-dlp "$url"
-	else
-		yt-dlp -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" "$url"
+		start "${args[@]}"
+		return
 	fi
+
+	local mp4=(-f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best")
+	args+=("${mp4[@]}")
+	start "${args[@]}"
 }
 
 batchDownload() {
-	requireBinary yt-dlp || exit $?
 	file=$1
 	if [[ ! -f $file ]]; then
 		echo "Error: File '$file' does not exist."
@@ -221,6 +207,8 @@ numProcs() {
 	pgrep -afc "$script [^-]"
 }
 
+requireBinary yt-dlp || exit $?
+
 if [ $# -lt 1 ]; then
 	echo "Try '$script -h' for more information."
 	exit 2
@@ -280,8 +268,7 @@ while [ $# -gt 0 ]; do
 		best=true
 		;;
 	-c | --cookies)
-		ytdlp=true
-		youtube_dl=false
+		cookies=true
 		;;
 	-h | --help)
 		usage
@@ -298,13 +285,7 @@ while [ $# -gt 0 ]; do
 done
 
 if isYoutubeURL "$url"; then
-	requireBinary yt-dlp || exit $?
 	downloadWithQuality
-	exit
-fi
-
-if $ytdlp; then
-	useCookies "$url"
 	exit
 fi
 

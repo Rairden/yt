@@ -27,13 +27,17 @@ killProcesses() {
 	fi
 }
 
+listIncompleteFiles() {
+	find . -maxdepth 1 -type f \( -name "*.part" -o -name "*.temp.*" \)
+}
+
 reportIncomplete() {
 	startTime=$(date +%s)
 	incomplete=true
 
 	# Check existence for incomplete files for 60 seconds
 	while (($(date +%s) - startTime < 60)); do
-		files=$(find . -maxdepth 1 -type f -name "*.part")
+		files=$(listIncompleteFiles)
 		if [[ -z $files ]]; then
 			incomplete=false
 			break
@@ -42,7 +46,7 @@ reportIncomplete() {
 
 	if $incomplete; then
 		echo -e "\nWarning, you have incomplete files. Try to manually kill these:\n"
-		find . -maxdepth 1 -type f -name "*.part"
+		listIncompleteFiles
 	else
 		echo -e "\nAll files closed successfully. You can close your terminal."
 	fi
@@ -80,6 +84,6 @@ while read -r pid state _ _ url; do
 	fi
 done < <(pgrep -f "$cmd [^-]" | xargs ps -o pid=,state=,args= -p)
 
-if [[ $action == -k ]]; then
+if [[ $action =~ -[fk] ]]; then
 	reportIncomplete
 fi
