@@ -1,7 +1,5 @@
 #!/bin/bash
 
-source "$HOME"/.scripts/std 2>/dev/null
-
 script="$(basename "$0")"
 url=
 best=false
@@ -78,11 +76,12 @@ start() {
 
 download() {
 	filename=$(yt-dlp --print filename -o "%(title)s.%(ext)s" "$url")
-	[ -z "$filename" ] && echo "filename not found" && exit 21
+	[ -z "$filename" ] && echo "filename not found" && exit 3
 
 	setsid suspended-monitor $$ &> /dev/null &
 	MONITOR_PID=$!
 	trap 'kill -USR1 $MONITOR_PID' EXIT
+	trap 'printf "\033]30;ch\007"' EXIT INT
 
 	local args=("${sanitizeFileName[@]}")
 
@@ -91,7 +90,7 @@ download() {
 		userAgent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
 		args+=('--cookies-from-browser' chrome '--user-agent' "$userAgent")
 		filename=$(yt-dlp "${args[@]}" --print filename "$url")
-		[ -z "$filename" ] && echo "filename not found" && exit 23
+		[ -z "$filename" ] && echo "filename not found" && exit 3
 	fi
 
 	log

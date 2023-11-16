@@ -1,7 +1,5 @@
 #!/bin/bash
 
-source "$HOME"/.scripts/std 2>/dev/null
-
 script=$(basename "$0")
 log=/tmp/ytmonitor.log
 pidToMonitor=$1
