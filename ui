@@ -1,0 +1,15 @@
+#!/bin/bash
+
+
+yt -r
+echo
+
+df -h /dev/sda2 --output=source,target,avail
+echo
+
+yt -s
+echo
+
+# ytPath is an env var. Where you want files saved.
+# fd -e list -x sh -c 'echo -e "\033[33m$1\033[0m"; cat "$1" | tail -n +2; echo' _ {}		# works
+find "$ytPath" -type f -name "*.list" -exec sh -c 'echo -e "\033[33m$1\033[0m"; cat "$1" | tail -n +2; echo' _ {} \;

@@ -14,14 +14,27 @@ fromFile() {
 	konsole -p tabtitle='yt' --separate --tabs-from-file "$tabsFromFile" &
 }
 
-if ! pgrep -f "alacritty.*--title yt" > /dev/null; then
-	alacritty --config-file ~/scratch/alacritty-yt.yml --title yt --command /bin/bash -c 'watch -d "yt -r; echo; yt -s"' &
+runUI() {
+	if ! pgrep -f "alacritty.*--title yt" > /dev/null; then
+		alacritty --config-file ~/scratch/alacritty-yt.toml \
+			--title yt \
+			--command /bin/bash -c \
+			'watch -d -c ui' & disown
+	fi
+}
+
+if [ "$1" = "-ui" ]; then
+	runUI
+	exit
 fi
 
-for ((i = 1; i <= 21; i++)); do
+runUI
+
+for ((i = 1; i <= 20; i++)); do
 	konsole -p tabtitle="ch$i" --workdir="$saveDir" --new-tab -e "bash -c 'xdotool type \"$cmd\" && exec zsh'"
 done
 
+konsole -p tabtitle="mpv" --workdir="$saveDir" --new-tab -e "bash -c 'xdotool type \"mpv \" && exec zsh'"
 konsole -p tabtitle="vidinfo" --workdir="$saveDir" --new-tab -e "bash -c 'xdotool type \"vidinfo \" && exec zsh'"
 konsole -p tabtitle="yt --swap" --workdir="$saveDir" --new-tab -e "bash -c 'xdotool type \"yt --swap\" && exec zsh'"
 konsole -p tabtitle="yt -p" --workdir="$saveDir" --new-tab -e "bash -c 'xdotool type \"yt -p\" && exec zsh'"

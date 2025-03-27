@@ -4,6 +4,7 @@ script="$(basename "$0")"
 action=$1	# -k for kill, -p for pause
 cmd=$2
 cmd=${cmd:0:15}
+runningRegexFile=/tmp/re.txt
 
 pauseProcesses() {
 	if [[ $state = S ]]; then
@@ -28,7 +29,7 @@ killProcesses() {
 }
 
 listIncompleteFiles() {
-	find . -maxdepth 1 -type f \( -name "*.part" -o -name "*.temp.*" \)
+	find . -maxdepth 1 -type f \( -name "*.part" -o -name "*.temp.*" \) -mtime -1 2>/dev/null
 }
 
 reportIncomplete() {
@@ -58,7 +59,9 @@ if [ $# -ne 2 ]; then
 	exit 1
 fi
 
-numProcesses=$(pgrep -afc "$cmd [^-]")
+runningRegex=$(<"$runningRegexFile")
+
+numProcesses=$(pgrep -afc "$cmd $runningRegex")
 
 if ((numProcesses == 0)); then
 	echo "There are no processes to manage."
@@ -66,7 +69,7 @@ if ((numProcesses == 0)); then
 fi
 
 if [[ $action == -p ]]; then
-	runningProcs=$(pgrep -afc "$cmd [^-]" -r S)
+	runningProcs=$(pgrep -afc "$cmd $runningRegex" -r S)
 	if ((runningProcs == 0)); then
 		echo "There are no running processes to pause."
 		exit
@@ -82,7 +85,7 @@ while read -r pid state _ _ url; do
 	elif [[ $action == -k ]]; then
 		killProcesses
 	fi
-done < <(pgrep -f "$cmd [^-]" | xargs ps -o pid=,state=,args= -p)
+done < <(pgrep -f "$cmd $runningRegex" | xargs ps -o pid=,state=,args= -p)
 
 if [[ $action =~ -[fk] ]]; then
 	reportIncomplete

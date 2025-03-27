@@ -5,6 +5,8 @@ url=
 best=false
 cookies=false
 logfile=$HOME/scratch/yt.log
+runningRegexFile=/tmp/re.txt
+runningRegex='(-c )?http'
 log=/tmp/ytmonitor.log
 startTime=$(($(date +%s%N)/1000000))
 
@@ -29,6 +31,8 @@ usage() {
         -f, --forcekill         kill all processes w/out prompting
         -p, --pauseall          pause all running processes
         -g, --grep              search for running processes
+        -d, --del               cleans up .temp files less than x hours old
+        -t, --show-temp         shows .temp files in the past 1 day
         -c, --cookies           use cookies with a web browser (CAPTCHA, or login required)
         -b, --batch-file FILE   file containing URLs to download
             --recent-pids       returns two pids [recentRunning recentSuspend]
@@ -75,7 +79,7 @@ start() {
 }
 
 download() {
-	filename=$(yt-dlp --print filename -o "%(title)s.%(ext)s" "$url")
+	filename=$(yt-dlp --no-warnings --print filename -o "%(title)s.%(ext)s" "$url")
 	[ -z "$filename" ] && echo "filename not found" && exit 3
 
 	setsid suspended-monitor $$ &> /dev/null &
@@ -87,7 +91,7 @@ download() {
 
 	if $cookies; then
 		# login to their website using a browser. Then paste your browser user-agent into here.
-		userAgent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
+		userAgent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
 		args+=('--cookies-from-browser' chrome '--user-agent' "$userAgent")
 		filename=$(yt-dlp "${args[@]}" --print filename "$url")
 		[ -z "$filename" ] && echo "filename not found" && exit 3
@@ -124,15 +128,11 @@ batchDownload() {
 	done < "$file" | sort -u
 }
 
-requireBinary() {
-	local binary line
-	binary=$1
-	if ! command -v "$binary" &> /dev/null; then
-		line=$(caller | awk '{print $1}')
-		echo "Error: $binary is not installed. Check line $line."
-		return 1
+requires() {
+	if ! command -v "$1" &>/dev/null; then
+		echo "Requires $1"
+		exit 1
 	fi
-	return 0
 }
 
 getRecentProcessStates() {
@@ -182,7 +182,7 @@ getRecentProcessStates() {
 swapActiveSuspended() {
 	local recentRunning recentSuspend
 
-	runningProcs=$(pgrep -afc "$script [^-]" -r S)
+	runningProcs=$(pgrep -afc "$script $runningRegex" -r S)
 	if ((runningProcs < 1)); then
 		echo "Error: at least 1 running process is required to perform a swap."
 		return 1
@@ -203,21 +203,113 @@ swapActiveSuspended() {
 }
 
 numProcs() {
-	pgrep -afc "$script [^-]"
+	pgrep -afc "$script $runningRegex"
 }
 
-requireBinary yt-dlp || exit $?
+cleanup() {
+	trap retypeCMD EXIT
+	timeframe="${2:-8hr}"
+	files=$(fd -d1 -e part --changed-within "$timeframe") || return
+
+	if [[ -n $files ]]; then
+		echo "$files"
+		read -p $'\nDelete current file (c), all listed files (a), or none (n)? (c/a/n): '
+		case "$REPLY" in
+			c|C)
+				delCurrFile
+				scriptPID=$(pgrep -P "$PPID" -ox "$(basename "$0")")
+				kill -KILL -"$scriptPID"
+				printf "\033]30;ch\007"
+				;;
+			a|A)
+				echo "$files" | xargs -d '\n' rm -v
+				pkill -KILL "$(basename "$0")"
+				;;
+			*)
+				echo "No files deleted."
+				;;
+		esac
+		return
+	fi
+
+	echo "No .part files found."
+}
+
+delCurrFile() {
+	ffmpegPid=$(pstree -p $PPID | rg -o 'ffmpeg\(\d+\)' | head -n1 | rg -o '\d+')
+
+	if [[ -n $ffmpegPid ]]; then
+		path=$(lsof -p "$ffmpegPid" | rg '\.part$' | rg -o '/.*\.part$')
+		file=$(basename "$path")
+
+		if [[ -n $file ]]; then
+			echo "Found file: $file"
+			read -r -p "Do you want to delete it? (y/n): " response
+			if [[ $response =~ ^[yY]$ ]]; then
+				rm -v "$path"
+			else
+				echo "File not deleted."
+			fi
+		else
+			echo "No .part file found for ffmpeg process."
+		fi
+	else
+		echo "No ffmpeg process found."
+	fi
+}
+
+retypeCMD() {
+	interactiveShell=$(ps -o comm= -p $PPID)
+
+	if [[ $interactiveShell == zsh ]]; then
+		xdotool type "$(basename ${BASH_SOURCE}) " && exec zsh
+	elif [[ $interactiveShell == bash ]]; then
+		xdotool type "$(basename ${BASH_SOURCE}) " & disown
+	fi
+}
+
+showTempFiles() {
+	fd -d1 -e part --changed-within 1d -x du -h | sort -hr
+}
+
+hasDiskSpace() {
+	local video availableSpace cushion=104857600 # 100MB in bytes
+	video=$(fd -e part --changed-within 1d -x du -b | awk '{sum+=$1} END {print sum+0}')
+	availableSpace=$(df --block-size=1 "$(pwd)" --output=avail | tail -n1)
+
+	if ((video + cushion < availableSpace)); then
+		return 0
+	else
+		local requiredSpace=$((video + cushion - availableSpace))
+		echo -e "Insufficient disk space. Please free up $((requiredSpace / 1048576)) MB.\n"
+		showTempFiles
+		return 1
+	fi
+}
+
+requires yt-dlp
 
 if [ $# -lt 1 ]; then
 	echo "Try '$script -h' for more information."
 	exit 2
 fi
 
+if [[ ! -f $runningRegexFile ]]; then
+	printf "%s\n" "$runningRegex" > "$runningRegexFile"
+fi
+
 while [ $# -gt 0 ]; do
 	case $1 in
 	-s | --suspended)
-		[[ $(numProcs) == 0 ]] && echo "No processes running."
-		ps -o pid=,user=,state=,args= -C "$script" | grep -v "yt -" | sort -k3,3 -k1,1n -b
+		numprocs=$(numProcs)
+		((numprocs == 0))  && echo "No processes running." && exit
+		if ((numprocs == 1)); then
+			echo "1 total process."
+		else
+			echo "$numprocs total processes."
+		fi
+
+		ps -o pid=,user=,state=,args= -C "$script" | grep -P "$script $runningRegex" | sort -k3,3 -k1,1n -b
 		exit
 		;;
 	-r | --recent)
@@ -233,8 +325,10 @@ while [ $# -gt 0 ]; do
 		exit
 		;;
 	-f | --forcekill)
-		suspended-control -p "$script"
-		suspended-control -k "$script"
+		if hasDiskSpace; then
+			suspended-control -p "$script"
+			suspended-control -k "$script" && exit 0 || exit 1
+		fi
 		exit
 		;;
 	-p | --pauseall)
@@ -269,12 +363,20 @@ while [ $# -gt 0 ]; do
 	-c | --cookies)
 		cookies=true
 		;;
+	-d | --del)
+		cleanup "$@"
+		exit
+		;;
 	-h | --help)
 		usage
 		exit
 		;;
 	--recent-pids)
 		getRecentProcessStates
+		exit
+		;;
+	-t | --show-temp)
+		showTempFiles
 		exit
 		;;
 	*)

@@ -1,0 +1,15 @@
+#!/bin/bash
+
+db=videos.db
+
+sqlite3 $db <<-EOF
+	.echo on
+	.headers on
+	.mode column
+	.width 64
+	pragma integrity_check;
+	.dbinfo
+	.tables
+	select count(*) from videos;
+	select * from videos limit 5;
+EOF
