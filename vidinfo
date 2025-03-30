@@ -1,19 +1,19 @@
 #!/bin/bash
 
 source "$HOME"/.scripts/std 2>/dev/null
-startTime=$(date +%s.%N)
 
+startTime=$(date +%s.%N)
 script="$(basename "$0")"
-dbPath=$ytPath		#env var
+dbPath=$ytpath	# env var
+dbFile="$dbPath/videos.db"
 file=$1
 ARGC=$#
 declare -a videos
-declare -a metadata
-matchingVideos=()
+declare -a result
+declare -i cachedCnt=0
+declare -i processedCnt=0
 
-tmpfile=$(mktemp)	# tmp file for the matching vids
-cachedCnt=0
-processedCnt=0
+metaFile=$(mktemp)	# tmp file for the matching videos
 
 format=$'General;%OverallBitRate/String%,%Duration/String2%,%Duration%,%FileSize/String%,%CompleteName%,%Format%,\n'
 format+='Video;%Width%x%Height%,%FrameRate%fps,%CodecID%,'
@@ -37,7 +37,7 @@ DOC
 calcEndTime() {
 	endTime=$(date +%s.%N)
 	elapsedTime=$(echo "$endTime - $startTime" | bc)
-	printf "Time elapsed: %.3f seconds\n" $elapsedTime >&2
+	printf "Time elapsed: %.1f seconds\n" $elapsedTime
 }
 
 requires() {
@@ -51,7 +51,7 @@ retypeCMD() {
 	interactiveShell=$(ps -o comm= -p $PPID)
 
 	if [[ $interactiveShell == zsh ]]; then
-		xdotool type "$(basename ${BASH_SOURCE}) " &>/dev/null && exec zsh
+		{ sleep 0.1; xdotool type "$(basename ${BASH_SOURCE}) " ;} &
 	elif [[ $interactiveShell == bash ]]; then
 		xdotool type "$(basename ${BASH_SOURCE}) " &>/dev/null & disown
 	fi
@@ -68,54 +68,95 @@ getName() {
 		name="${file#/}"
 		name="${name%/}"
 	fi
+
 	echo "$name"
 }
 
-basic() {
+initDB() {
+	if [[ ! -f "$dbFile" ]]; then
+		sqlite3 "$dbFile" "
+		CREATE TABLE users (
+			username TEXT PRIMARY KEY,
+			note TEXT
+		);
+
+		CREATE TABLE videos (
+			hash TEXT PRIMARY KEY,
+			file TEXT,
+			username TEXT,
+			size INTEGER,
+			duration INTEGER,
+			width INTEGER,
+			height INTEGER,
+			metadata TEXT,
+			FOREIGN KEY (username) REFERENCES users(username)
+		);
+
+		-- Create an index on username for faster joins
+		CREATE INDEX idx_videos_username ON videos(username);
+		" 2>/dev/null
+	fi
+}
+
+processFile() {
+	metadata=$1
+	IFS="," read -r _ _ rawDuration _ _ _ resolution _ <<< "$metadata"
+	size=$(stat -c "%s" "$video")
+	width=${resolution%x*}
+	height=${resolution#*x}
+	dur=${rawDuration%.*}           # remove decimal
+	[[ -z "$dur" ]] && return 1     # skip empty results
+	((dur /= 1000))                 # convert to seconds
+
+	sqlite3 "$dbFile" "insert or replace into users (username, note) values ('$username', NULL)" 2>/dev/null
+
+	sqlite3 "$dbFile" "insert or replace into \
+		videos (hash, file, username, size, duration, width, height, metadata) \
+		values ('$hash', '$video', '$username', $size, $dur, $width, $height, '$metadata')" 2>/dev/null
+
+	return $?
+}
+
+findVideos() {
 	mapfile -t videos < <(fd -e mp4 -t f "$name")
 
 	for video in "${videos[@]}"; do
-		hash=$(head -c 1M "$video" | sha256sum)
+		hash=$(head -c 128K "$video" | sha256sum)
 		hash=${hash%% *}
 		username="${video%% *}"		# Remove everything after first space
+		username="$(basename "$username")"
 
-		cachedMetadata=$(sqlite3 "$dbFile" "select metadata from videos where hash = '$hash'" 2>/dev/null)
+		cachedMetadata=$(sqlite3 -init /dev/null "$dbFile" "select metadata from videos where hash = '$hash'" 2>/dev/null)
 
 		if [[ -n "$cachedMetadata" ]]; then
-			echo "$cachedMetadata" >> "$tmpfile"
+			echo "$cachedMetadata" >> "$metaFile"
 			((cachedCnt++))
 		else
-			info=$(mediainfo --Output="$format" "$video")
-			((processedCnt++))
-			echo "$info" >> "$tmpfile"
+			metadata=$(mediainfo --Output="$format" "$video")
+			echo "$metadata" >> "$metaFile"
+
+			if processFile "$metadata"; then
+				((processedCnt++))
+			else
+				echo "Corrupt file: $video"
+			fi
 		fi
 
-		matchingVideos+=("$video")
+		result+=("$video")
 	done
 }
 
-filterDuration() {
+findVideosByDuration() {
 	minDuration=$1
 	name=$2
-
-	dbFile="$dbPath/videos.db"
-
-	if [[ ! -f "$dbFile" ]]; then
-		sqlite3 "$dbFile" "CREATE TABLE videos (
-		   hash TEXT PRIMARY KEY,
-		   file TEXT,
-		   username TEXT,
-		   duration INTEGER,
-		   metadata TEXT
-		);" 2>/dev/null
-	fi
 
 	mapfile -t videos < <(fd -e mp4 -t f "$name")
 
 	for video in "${videos[@]}"; do
-		hash=$(head -c 1M "$video" | sha256sum)
+		hash=$(head -c 128K "$video" | sha256sum)	# use first 128 KiB for the primary key
 		hash=${hash%% *}
 		username="${video%% *}"		# Remove everything after first space
+		username="$(basename "$username")"
 
 		# Check if in cache
 		cachedMetadata=$(sqlite3 "$dbFile" "select metadata from videos where hash = '$hash'" 2>/dev/null)
@@ -126,31 +167,24 @@ filterDuration() {
 			((cachedCnt++))
 
 			if ((cacheDur >= minDuration)); then
-				echo "$cachedMetadata" >> "$tmpfile"
-				matchingVideos+=("$video")
+				echo "$cachedMetadata" >> "$metaFile"
+				result+=("$video")
 			fi
 		else
 			# Process file
-			info=$(mediainfo --Output="$format" "$video")
-			IFS="," read -r _ _ rawDuration _ <<< "$info"
-			dur=${rawDuration%.*}			# remove decimal
-			[[ -z "$dur" ]] && continue		# skip empty results
-			((dur /= 1000))					# convert to seconds
-			((processedCnt++))
+			metadata=$(mediainfo --Output="$format" "$video")
 
-			sqlite3 "$dbFile" "insert or replace into videos \
-				(hash, file, username, duration, metadata) \
-				values ('$hash', '$video', '$username', $dur, '$info')" 2>/dev/null
-
-			if ((dur >= minDuration)); then
-				echo "$info" >> "$tmpfile"
-				matchingVideos+=("$video")
+			if processFile "$metadata"; then
+				((processedCnt++))
+				if ((dur >= minDuration)); then
+					echo "$metadata" >> "$metaFile"
+					result+=("$video")
+				fi
+			else
+				echo "Corrupt file: $video"
 			fi
 		fi
 	done
-
-	echo "Used cache: $cachedCnt files, Processed: $processedCnt files"
-	echo -e "Found ${#matchingVideos[@]} videos with duration >= ${minDuration}s \n"
 }
 
 if [[ $# -eq 0 ]]; then
@@ -163,12 +197,15 @@ requires mediainfo
 requires mpv
 trap retypeCMD EXIT
 
+initDB
+
 while [ $# -gt 0 ]; do
 	case $1 in
 	-d | --duration)
 		shift
+		dur=$1
 		name=$(getName "$2")
-		filterDuration "$1" "$name"
+		findVideosByDuration "$dur" "$name"
 		break
 		;;
 	-h | --help)
@@ -177,21 +214,25 @@ while [ $# -gt 0 ]; do
 		;;
 	*)
 		name=$(getName "$1")
-		basic "$name"
+		findVideos "$name"
 		;;
 	esac
 	shift
 done
 
-mapfile -t metadata < "$tmpfile"
-calcEndTime
-
-if [[ ${#metadata[@]} -gt 0 ]]; then
-	echo -e "Found ${#metadata[@]} videos\n"
-	column -t -s ',' "$tmpfile"
+if [[ -s "$metaFile" ]]; then
+	vidCount=$(wc -l < "$metaFile")
+	column -t -s ',' "$metaFile"
+	printf "\n%13s %s files\n" "Used cache:" "$cachedCnt"
+	printf "%13s %s files\n" "Processed:" "$processedCnt"
+	printf "%13s %s files\n" "Found:" "$vidCount"
 	echo
 	read -rp "Open files? [y,Y] "
 	if [[ $REPLY =~ ^[yY]$ ]]; then
-		mpv "${matchingVideos[@]}" &>/dev/null &
+		mpv "${result[@]}" &>/dev/null &
 	fi
+else
+	echo -e "No videos found\n"
 fi
+
+calcEndTime

@@ -2,9 +2,9 @@
 
 #https://docs.kde.org/trunk5/en/konsole/konsole/command-line-options.html
 
-# Run with `yt-rec && exit`. ytPath is an env var. Where you want files saved.
+# Run with `yt-rec && exit`. ytpath is an env var. Where you want files saved.
 
-saveDir="$ytPath"
+saveDir="$ytpath"
 tabsFromFile="/run/media/erik/storage/vuze/megaDL/konsole.txt"
 
 cmd=$1
@@ -31,11 +31,13 @@ fi
 runUI
 
 for ((i = 1; i <= 20; i++)); do
-	konsole -p tabtitle="ch$i" --workdir="$saveDir" --new-tab -e "bash -c 'xdotool type \"$cmd\" && exec zsh'"
+	# konsole -p tabtitle="ch$i" --workdir="$saveDir" --new-tab -e "bash -c 'xdotool type \"$cmd\" && exec zsh'"
+	konsole -p tabtitle="ch$i" --workdir="$saveDir" --new-tab -e "bash -c '{ sleep 0.1; xdotool type \"$cmd\" ;} & disown; exec zsh'"
 done
 
-konsole -p tabtitle="mpv" --workdir="$saveDir" --new-tab -e "bash -c 'xdotool type \"mpv \" && exec zsh'"
-konsole -p tabtitle="vidinfo" --workdir="$saveDir" --new-tab -e "bash -c 'xdotool type \"vidinfo \" && exec zsh'"
-konsole -p tabtitle="yt --swap" --workdir="$saveDir" --new-tab -e "bash -c 'xdotool type \"yt --swap\" && exec zsh'"
-konsole -p tabtitle="yt -p" --workdir="$saveDir" --new-tab -e "bash -c 'xdotool type \"yt -p\" && exec zsh'"
+konsole -p tabtitle="fd" --workdir="$saveDir" --new-tab -e "bash -c '{ sleep 0.1; xdotool type \"fd \" ;} & disown; exec zsh'"
+konsole -p tabtitle="mpv" --workdir="$saveDir" --new-tab -e "bash -c '{ sleep 0.1; xdotool type \"mpv \" ;} & disown; exec zsh'"
+konsole -p tabtitle="vidinfo" --workdir="$saveDir" --new-tab -e "bash -c '{ sleep 0.1; xdotool type \"vidinfo \" ;} & disown; exec zsh'"
+konsole -p tabtitle="yt --swap" --workdir="$saveDir" --new-tab -e "bash -c '{ sleep 0.1; xdotool type \"yt --swap\" ;} & disown; exec zsh'"
+konsole -p tabtitle="yt -p" --workdir="$saveDir" --new-tab -e "bash -c '{ sleep 0.1; xdotool type \"yt -p\" ;} & disown; exec zsh'"
 konsole -p tabtitle='yt' --workdir="$saveDir" --new-tab -e "bash -c 'exit'"

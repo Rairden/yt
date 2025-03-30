@@ -1,0 +1,66 @@
+#!/bin/bash
+
+# Using https://github.com/familyfriendlymikey/mpv-cut
+# Hit 'a' a few times toggling to LIST mode.
+# You create a .list file by hitting 'c' (CUT) twice in LIST mode.
+# You can make 3 cut segments (6 markers) by hitting 'c' 6 times.
+# Run this script to go through all .list files in current dir and subdirs.
+
+source "$HOME"/.config/mpv/scripts/mpv-cut/utils
+
+# Find all .list files in current directory and subdirectories
+mapfile -t listFiles < <(find . -name "*.list" -type f)
+
+if [[ ${#listFiles[@]} -eq 0 ]]; then
+	echo "No .list files found. Aborting."
+	exit 1
+fi
+
+echo "Trimmed:"
+totalSaved=0
+
+for listPath in "${listFiles[@]}"; do
+	dir=$(dirname "$listPath")
+	list=$(basename "$listPath")
+
+	currentDir=$(pwd)
+
+	cd "$dir" || continue
+
+	vid="${list%.list}"
+	ext="${vid##*.}"
+	vid_noext="${vid%.*}"
+
+	rm -f "CUT_"*
+
+	output="${vid_noext}e.${ext}"  # vid1.mp4 -> vid1e.mp4
+	make_cuts "$list" -c copy &>/dev/null
+	concat "CUT" -c copy "$output" &>/dev/null
+
+	origSize=$(stat -c %s "$vid")
+	newSize=$(stat -c %s "$output")
+	saved=$((origSize - newSize))
+	totalSaved=$((totalSaved + saved))  # Keep running total
+
+	savedSize=$(numfmt --to=iec-i --suffix=B --format="%.1f" --round=nearest "$saved")
+
+	kioclient5 move "$vid" trash:   # Move original file to trash
+	kioclient5 move "$list" trash:  # Move .list file
+
+	# Display relative path for better clarity
+	relPath="${dir#./}"
+	if [[ -z "$relPath" ]]; then
+		printf "%-15s %s\n" "$savedSize" "$vid"
+	else
+		printf "%-15s %s/%s\n" "$savedSize" "$relPath" "$vid"
+	fi
+
+	# Clean up CUT_ files
+	rm -f CUT_*
+
+	# Return to original directory
+	cd "$currentDir" || exit 1
+done
+
+totalTrimmed=$(numfmt --to=iec-i --suffix=B --format="%.1f" --round=nearest "$totalSaved")
+echo -e "\nTotal Trimmed: $totalTrimmed"
