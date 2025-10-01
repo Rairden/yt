@@ -28,16 +28,18 @@ if [ "$1" = "-ui" ]; then
 	exit
 fi
 
+echo "$(date '+%Y-%m-%d %H:%M:%S') $(date +%s)" > /tmp/yt-start-time.log
+
 runUI
 
-for ((i = 1; i <= 20; i++)); do
+for ((i = 1; i <= 19; i++)); do
 	# konsole -p tabtitle="ch$i" --workdir="$saveDir" --new-tab -e "bash -c 'xdotool type \"$cmd\" && exec zsh'"
 	konsole -p tabtitle="ch$i" --workdir="$saveDir" --new-tab -e "bash -c '{ sleep 0.1; xdotool type \"$cmd\" ;} & disown; exec zsh'"
 done
 
+konsole -p tabtitle="insert" --workdir="$saveDir" --new-tab -e "bash -c '{ sleep 0.1; xdotool type \"insert \" ;} & disown; exec zsh'"
 konsole -p tabtitle="fd" --workdir="$saveDir" --new-tab -e "bash -c '{ sleep 0.1; xdotool type \"fd \" ;} & disown; exec zsh'"
 konsole -p tabtitle="mpv" --workdir="$saveDir" --new-tab -e "bash -c '{ sleep 0.1; xdotool type \"mpv \" ;} & disown; exec zsh'"
 konsole -p tabtitle="vidinfo" --workdir="$saveDir" --new-tab -e "bash -c '{ sleep 0.1; xdotool type \"vidinfo \" ;} & disown; exec zsh'"
-konsole -p tabtitle="yt --swap" --workdir="$saveDir" --new-tab -e "bash -c '{ sleep 0.1; xdotool type \"yt --swap\" ;} & disown; exec zsh'"
-konsole -p tabtitle="yt -p" --workdir="$saveDir" --new-tab -e "bash -c '{ sleep 0.1; xdotool type \"yt -p\" ;} & disown; exec zsh'"
+konsole -p tabtitle="tmp" --workdir="$saveDir" --new-tab -e "bash -c '{ sleep 0.1; xdotool type \"yt --pauseall \" ;} & disown; exec zsh'"
 konsole -p tabtitle='yt' --workdir="$saveDir" --new-tab -e "bash -c 'exit'"

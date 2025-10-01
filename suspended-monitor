@@ -23,16 +23,17 @@ if ((cnt <= 1)); then
 	rm -f "$log"
 fi
 
-while kill -0 "$pidToMonitor" 2> /dev/null; do
+while kill -0 "$pidToMonitor" 2>/dev/null; do
 	currState=$(ps -o stat= -p "$pidToMonitor")
 
-	if [[ $currState == T && $prevState != T ]]; then
-		logState "$pidToMonitor" suspended
-	elif [[ $currState != T && ( -z $prevState || $prevState == T ) ]]; then
-		logState "$pidToMonitor" running
+	if [[ $currState != "$prevState" ]]; then
+		case $currState in
+			T) logState "$pidToMonitor" suspended ;;
+			*) logState "$pidToMonitor" running ;;
+		esac
+		prevState="$currState"
 	fi
 
-	prevState="$currState"
 	sleep 0.5
 done
 

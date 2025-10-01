@@ -1,7 +1,5 @@
 #!/bin/bash
 
-source "$HOME"/.scripts/std 2>/dev/null
-
 startTime=$(date +%s.%N)
 script="$(basename "$0")"
 dbPath=$ytpath	# env var
@@ -118,7 +116,16 @@ processFile() {
 }
 
 findVideos() {
-	mapfile -t videos < <(fd -e mp4 -t f "$name")
+	local searchPaths=()
+
+	# Check if the environment variable is set and not empty
+	if [[ -n "$VIDINFO_DIRS" ]]; then
+		IFS=':' read -r -a searchPaths <<< "$VIDINFO_DIRS"
+	else
+		searchPaths+=(".")
+	fi
+
+	mapfile -t videos < <(fd -e mp4 -t f "$name" "${searchPaths[@]}")
 
 	for video in "${videos[@]}"; do
 		hash=$(head -c 128K "$video" | sha256sum)
@@ -150,7 +157,16 @@ findVideosByDuration() {
 	minDuration=$1
 	name=$2
 
-	mapfile -t videos < <(fd -e mp4 -t f "$name")
+	local searchPaths=()
+
+	# Check if the environment variable is set and not empty
+	if [[ -n "$VIDINFO_DIRS" ]]; then
+		IFS=':' read -r -a searchPaths <<< "$VIDINFO_DIRS"
+	else
+		searchPaths+=(".")
+	fi
+
+	mapfile -t videos < <(fd -e mp4 -t f "$name" "${searchPaths[@]}")
 
 	for video in "${videos[@]}"; do
 		hash=$(head -c 128K "$video" | sha256sum)	# use first 128 KiB for the primary key
@@ -159,11 +175,11 @@ findVideosByDuration() {
 		username="$(basename "$username")"
 
 		# Check if in cache
-		cachedMetadata=$(sqlite3 "$dbFile" "select metadata from videos where hash = '$hash'" 2>/dev/null)
+		cachedMetadata=$(sqlite3 -init /dev/null "$dbFile" "select metadata from videos where hash = '$hash'" 2>/dev/null)
 
 		if [[ -n "$cachedMetadata" ]]; then
 			# Get duration from cache to check if it meets minimum duration
-			cacheDur=$(sqlite3 "$dbFile" "select duration from videos where hash = '$hash'" 2>/dev/null)
+			cacheDur=$(sqlite3 -init /dev/null "$dbFile" "select duration from videos where hash = '$hash'" 2>/dev/null)
 			((cachedCnt++))
 
 			if ((cacheDur >= minDuration)); then

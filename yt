@@ -1,14 +1,12 @@
 #!/bin/bash
 
-source "$HOME"/.scripts/std 2>/dev/null
-dbginit
 script="$(basename "$0")"
 url=
-best=false
+resolution=
 cookies=false
 logfile=$HOME/scratch/yt.log
 runningRegexFile=/tmp/re.txt
-runningRegex='(-c )?http'
+runningRegex='.*http'
 log=/tmp/ytmonitor.log
 startTime=$(($(date +%s%N)/1000000))
 
@@ -28,18 +26,19 @@ usage() {
 
 	Options:
         -s, --suspended         show suspended processes
-        -r, --recent            lists the two most recently suspended and running process
+            --recent            lists the two most recently suspended and running process
             --resume            resume recently suspended
         -k, --killall           kill all suspended processes
         -f, --forcekill         kill all processes w/out prompting
-        -p, --pauseall          pause all running processes
+        -p, --pause             pause the most recent running process
+            --pauseall          pause all running processes
         -g, --grep              search for running processes
         -d, --del               cleans up .temp files less than x hours old
         -t, --show-temp         shows .temp files in the past 1 day
         -c, --cookies           use cookies with a web browser (CAPTCHA, or login required)
         -b, --batch-file FILE   file containing URLs to download
+        -r, --resolution        set the maximum resolution
             --recent-pids       returns two pids [recentRunning recentSuspend]
-            --best              run yt-dlp as default (best quality)
             --swap              swaps the most recently suspended and running process
 DOC
 }
@@ -102,20 +101,29 @@ download() {
 
 	log
 	printf "\033]30;%s\007" "${filename:0:7}"	# rename Konsole tab
+
+	addFormatArgs args
 	start "${args[@]}"
 }
 
 downloadWithQuality() {
 	local args=("${sanitizeFileName[@]}")
+	addFormatArgs args
+	start "${args[@]}"
+}
 
-	if $best; then
-		start "${args[@]}"
-		return
+addFormatArgs() {
+	# This uses a "nameref" to modify the 'args' array from the calling function.
+	local -n _args=$1
+
+	local formatStr
+	if [ -n "$resolution" ]; then
+		formatStr="bestvideo[height<=$resolution][ext=mp4]+bestaudio[ext=m4a]/best[height<=$resolution][ext=mp4]/best"
+	else
+		formatStr="bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
 	fi
 
-	local mp4=(-f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best")
-	args+=("${mp4[@]}")
-	start "${args[@]}"
+	_args+=(-f "$formatStr")
 }
 
 batchDownload() {
@@ -142,11 +150,6 @@ getRecentProcessStates() {
 	declare -A killedPIDs
 	local recentRunning recentSuspend state
 
-	if [[ ! -f $log || $(wc -l < "$log") -lt 2 ]]; then
-		echo "Error: not enough log entries to perform swap."
-		return 1
-	fi
-
 	# 2023-10-16 12:24:11  PID     5677  running    https://site.com/name/
 	while read -r date _ _ pid state _; do
 		[[ $date =~ ^# ]] && continue
@@ -164,19 +167,7 @@ getRecentProcessStates() {
 			killedPIDs[$pid]=
 		fi
 
-		if [[ -n $recentRunning && -n $recentSuspend && $recentSuspend -ne $recentRunning ]]; then
-			# make sure the recently suspended at least exists
-			if ps -p "$recentSuspend" &> /dev/null; then
-				break
-			fi
-		fi
 	done < <(tac $log)
-
-	# Check if we have both running and suspended processes to swap
-	if [[ -z $recentSuspend || -z $recentRunning || $recentSuspend -eq $recentRunning ]]; then
-		echo "Error: Couldn't find both a unique suspended and running process."
-		return 1
-	fi
 
 	echo "$recentRunning $recentSuspend"
 }
@@ -290,6 +281,21 @@ hasDiskSpace() {
 	fi
 }
 
+killProcess() {
+	if pid=$(pgrep -P $PPID -f "$0.*http"); then
+		kill -CONT "-$pid"
+		kill -INT "-$pid"
+
+		while kill -0 "$pid" 2>/dev/null; do
+			sleep 0.1
+		done
+
+		clear
+	else
+		echo "No $0 download running in current shell"
+	fi
+}
+
 requires yt-dlp
 
 if [ $# -lt 1 ]; then
@@ -301,7 +307,6 @@ if [[ ! -f $runningRegexFile ]]; then
 	printf "%s\n" "$runningRegex" > "$runningRegexFile"
 fi
 
-dbgon
 while [ $# -gt 0 ]; do
 	case $1 in
 	-s | --suspended)
@@ -316,10 +321,10 @@ while [ $# -gt 0 ]; do
 		ps -o pid=,user=,state=,args= -C "$script" | grep -P "$script $runningRegex" | sort -k3,3 -k1,1n -b
 		exit
 		;;
-	-r | --recent)
+	--recent)
 		read -r recentRunning recentSuspend <<< "$(getRecentProcessStates)"
-		suspendedProcessName=$(ps -p "$recentSuspend" -o args= 2>/dev/null | awk '{print $NF}')
 		runningProcessName=$(ps -p "$recentRunning" -o args= 2>/dev/null | awk '{print $NF}')
+		suspendedProcessName=$(ps -p "$recentSuspend" -o args= 2>/dev/null | awk '{print $NF}')
 		printf "%17s  %s\n" "recent Running:" "$runningProcessName"
 		printf "%17s  %s\n" "recent Suspended:" "$suspendedProcessName"
 		exit
@@ -335,6 +340,12 @@ while [ $# -gt 0 ]; do
 		suspended-control -k "$script"
 		exit
 		;;
+	--kill)
+		killProcess
+		xdotool type "$script "
+		exec $SHELL
+		exit
+		;;
 	-f | --forcekill)
 		if hasDiskSpace; then
 			suspended-control -p "$script"
@@ -342,8 +353,13 @@ while [ $# -gt 0 ]; do
 		fi
 		exit
 		;;
-	-p | --pauseall)
+	--pauseall)
 		suspended-control -p "$script"
+		exit
+		;;
+	-p | --pause)
+		read -r recentRunning recentSuspend <<< "$(getRecentProcessStates)"
+		kill -STOP "-$recentRunning"
 		exit
 		;;
 	--swap)
@@ -368,14 +384,16 @@ while [ $# -gt 0 ]; do
 		batchDownload "$path"
 		exit
 		;;
-	--best)
-		best=true
+	-r | --resolution)
+		resolution=$2
+		shift
 		;;
 	-c | --cookies)
 		cookies=true
 		;;
 	-d | --del)
 		cleanup "$@"
+		clear
 		exit
 		;;
 	-h | --help)

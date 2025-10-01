@@ -1,10 +1,22 @@
 #!/bin/bash
 
+startTime=/tmp/yt-start-time.log
 
-yt -r
+if [[ -f "$startTime" ]]; then
+	read -r _ _ epoch < "$startTime"
+
+	currentEpoch=$(date +%s)
+	duration=$((currentEpoch - epoch))
+	hours=$((duration / 3600))
+	minutes=$(((duration % 3600) / 60))
+	# seconds=$((duration % 60))
+	printf "%17s %02d:%02d\n" "uptime:" "$hours" "$minutes"
+fi
+
+yt --recent
 echo
 
-df -h /dev/sda2 --output=source,target,avail
+df -h /dev/sda1 --output=source,target,avail
 echo
 
 yt -s
