@@ -1,10 +1,10 @@
 #!/bin/bash
 
+
 startTime=$(date +%s.%N)
 script="$(basename "$0")"
 dbPath=$ytpath	# env var
 dbFile="$dbPath/videos.db"
-file=$1
 ARGC=$#
 declare -a videos
 declare -a result
@@ -18,17 +18,20 @@ format+='Video;%Width%x%Height%,%FrameRate%fps,%CodecID%,'
 
 usage() {
 	cat <<-DOC
-	Usage: $script [regex]
+	Usage: $script [options] [regex]
 
-	Uses a fd RE2 regex to search for video files. Trims input trailing slashes.
+	Processes video files from either a regex search or standard input.
 	Prints out metadata (bit rate, duration, size, filename, resolution, fps, codec).
+
+	Options:
+        -d, --duration <secs>   filter videos longer than <secs> seconds
 
 	Requires: fd, mpv, mediainfo
 
 	Examples:
         $script peach
-        $script https://domain.com/peach/
         $script -d 600 peach	# videos longer than 600s (10 mins)
+        fd --changed-within=1m | $script
 DOC
 }
 
@@ -56,10 +59,7 @@ retypeCMD() {
 }
 
 getName() {
-	if [[ $ARGC -gt 1 ]]; then
-		file=$1
-	fi
-
+	local file=$1
 	if [[ $file =~ ^https?:// ]]; then
 		name=$(basename "$file")
 	else
@@ -96,15 +96,61 @@ initDB() {
 	fi
 }
 
+processVideo() {
+	local video=$1
+	local minDuration=${2:-0} # Optional second argument for minimum duration
+
+	# Skip if the file doesn't exist or is not a file
+	[[ -f "$video" ]] || return
+
+	hash=$(head -c 128K "$video" | sha256sum)
+	hash=${hash%% *}
+	username="${video%% *}"		# Remove everything after first space
+	username="$(basename "$username")"
+
+	cachedMetadata=$(sqlite3 -init /dev/null "$dbFile" "select metadata from videos where hash = '$hash'" 2>/dev/null)
+
+	if [[ -n "$cachedMetadata" ]]; then
+		((cachedCnt++))
+		if ((minDuration > 0)); then
+			cacheDur=$(sqlite3 -init /dev/null "$dbFile" "select duration from videos where hash = '$hash'" 2>/dev/null)
+			if ((cacheDur >= minDuration)); then
+				echo "$cachedMetadata" >> "$metaFile"
+				result+=("$video")
+			fi
+		else
+			echo "$cachedMetadata" >> "$metaFile"
+			result+=("$video")
+		fi
+	else
+		metadata=$(mediainfo --Output="$format" "$video")
+
+		IFS="," read -r _ _ rawDuration _ _ _ resolution _ <<< "$metadata"
+		local dur=${rawDuration%.*}	    # remove decimal
+		[[ -z "$dur" ]] && return 1     # skip empty results
+		((dur /= 1000))                 # convert to seconds
+
+		if processFile "$metadata" "$video" "$dur"; then
+			((processedCnt++))
+			if ((dur >= minDuration)); then
+				echo "$metadata" >> "$metaFile"
+				result+=("$video")
+			fi
+		else
+			echo "Corrupt file: $video"
+		fi
+	fi
+}
+
 processFile() {
-	metadata=$1
-	IFS="," read -r _ _ rawDuration _ _ _ resolution _ <<< "$metadata"
-	size=$(stat -c "%s" "$video")
-	width=${resolution%x*}
-	height=${resolution#*x}
-	dur=${rawDuration%.*}           # remove decimal
-	[[ -z "$dur" ]] && return 1     # skip empty results
-	((dur /= 1000))                 # convert to seconds
+	local metadata=$1
+	local video=$2  # The full path to the video file
+	local dur=$3    # The duration in seconds
+
+	IFS="," read -r _ _ _ _ _ _ resolution _ <<< "$metadata"
+	local size=$(stat -c "%s" "$video")
+	local width=${resolution%x*}
+	local height=${resolution#*x}
 
 	sqlite3 "$dbFile" "insert or replace into users (username, note) values ('$username', NULL)" 2>/dev/null
 
@@ -116,6 +162,7 @@ processFile() {
 }
 
 findVideos() {
+	local name=$1
 	local searchPaths=()
 
 	# Check if the environment variable is set and not empty
@@ -128,83 +175,23 @@ findVideos() {
 	mapfile -t videos < <(fd -e mp4 -t f "$name" "${searchPaths[@]}")
 
 	for video in "${videos[@]}"; do
-		hash=$(head -c 128K "$video" | sha256sum)
-		hash=${hash%% *}
-		username="${video%% *}"		# Remove everything after first space
-		username="$(basename "$username")"
-
-		cachedMetadata=$(sqlite3 -init /dev/null "$dbFile" "select metadata from videos where hash = '$hash'" 2>/dev/null)
-
-		if [[ -n "$cachedMetadata" ]]; then
-			echo "$cachedMetadata" >> "$metaFile"
-			((cachedCnt++))
-		else
-			metadata=$(mediainfo --Output="$format" "$video")
-			echo "$metadata" >> "$metaFile"
-
-			if processFile "$metadata"; then
-				((processedCnt++))
-			else
-				echo "Corrupt file: $video"
-			fi
-		fi
-
-		result+=("$video")
+		processVideo "$video"
 	done
 }
 
 findVideosByDuration() {
-	minDuration=$1
-	name=$2
-
-	local searchPaths=()
-
-	# Check if the environment variable is set and not empty
-	if [[ -n "$VIDINFO_DIRS" ]]; then
-		IFS=':' read -r -a searchPaths <<< "$VIDINFO_DIRS"
-	else
-		searchPaths+=(".")
-	fi
-
+	local minDuration=$1
+	local name=$2
 	mapfile -t videos < <(fd -e mp4 -t f "$name" "${searchPaths[@]}")
 
 	for video in "${videos[@]}"; do
-		hash=$(head -c 128K "$video" | sha256sum)	# use first 128 KiB for the primary key
-		hash=${hash%% *}
-		username="${video%% *}"		# Remove everything after first space
-		username="$(basename "$username")"
-
-		# Check if in cache
-		cachedMetadata=$(sqlite3 -init /dev/null "$dbFile" "select metadata from videos where hash = '$hash'" 2>/dev/null)
-
-		if [[ -n "$cachedMetadata" ]]; then
-			# Get duration from cache to check if it meets minimum duration
-			cacheDur=$(sqlite3 -init /dev/null "$dbFile" "select duration from videos where hash = '$hash'" 2>/dev/null)
-			((cachedCnt++))
-
-			if ((cacheDur >= minDuration)); then
-				echo "$cachedMetadata" >> "$metaFile"
-				result+=("$video")
-			fi
-		else
-			# Process file
-			metadata=$(mediainfo --Output="$format" "$video")
-
-			if processFile "$metadata"; then
-				((processedCnt++))
-				if ((dur >= minDuration)); then
-					echo "$metadata" >> "$metaFile"
-					result+=("$video")
-				fi
-			else
-				echo "Corrupt file: $video"
-			fi
-		fi
+		processVideo "$video" "$minDuration"
 	done
 }
 
-if [[ $# -eq 0 ]]; then
-	echo "Provide at least one argument."
+if [[ $# -eq 0 && -t 0 ]]; then
+	echo -e "Provide a regex or pipe input to the script.\n"
+	usage
 	exit 1
 fi
 
@@ -215,26 +202,32 @@ trap retypeCMD EXIT
 
 initDB
 
-while [ $# -gt 0 ]; do
-	case $1 in
-	-d | --duration)
+if [[ $ARGC -eq 0 && ! -t 0 ]]; then
+	while IFS= read -r file; do
+		processVideo "$file"
+	done
+else
+	while [ $# -gt 0 ]; do
+		case $1 in
+		-d | --duration)
+			shift
+			dur=$1
+			name=$(getName "$2")
+			findVideosByDuration "$dur" "$name"
+			break
+			;;
+		-h | --help)
+			usage
+			exit
+			;;
+		*)
+			name=$(getName "$1")
+			findVideos "$name"
+			;;
+		esac
 		shift
-		dur=$1
-		name=$(getName "$2")
-		findVideosByDuration "$dur" "$name"
-		break
-		;;
-	-h | --help)
-		usage
-		exit
-		;;
-	*)
-		name=$(getName "$1")
-		findVideos "$name"
-		;;
-	esac
-	shift
-done
+	done
+fi
 
 if [[ -s "$metaFile" ]]; then
 	vidCount=$(wc -l < "$metaFile")
