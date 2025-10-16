@@ -148,28 +148,32 @@ requires() {
 
 getRecentProcessStates() {
 	declare -A killedPIDs
-	local recentRunning recentSuspend state
+	local recentRunning recentSuspend penultimateRunning state
 
-	# 2023-10-16 12:24:11  PID     5677  running    https://site.com/name/
 	while read -r date _ _ pid state _; do
 		[[ $date =~ ^# ]] && continue
 
-		# Ignore this PID if it has been killed
 		if [[ -v killedPIDs[$pid] ]]; then
 			continue
 		fi
 
-		if [[ -z $recentRunning && $state == running && $pid -ne $recentSuspend ]]; then
+		if [[ -z $recentRunning && $state == running ]]; then
 			recentRunning=$pid
-		elif [[ -z $recentSuspend && $state == suspended && $pid -ne $recentRunning ]]; then
+		elif [[ -n $recentRunning && -z $penultimateRunning && $state == running && $pid -ne $recentRunning ]]; then
+			penultimateRunning=$pid
+		elif [[ -z $recentSuspend && $state == suspended ]]; then
 			recentSuspend=$pid
 		elif [[ $state == killed ]]; then
 			killedPIDs[$pid]=
 		fi
 
-	done < <(tac $log)
+		if [[ -n $recentRunning && -n $recentSuspend && -n $penultimateRunning ]]; then
+			break
+		fi
 
-	echo "$recentRunning $recentSuspend"
+	done < <(tac "$log" 2>/dev/null)
+
+	echo "${recentRunning:-0} ${recentSuspend:-0} ${penultimateRunning:-0}"
 }
 
 # Swaps the most recently suspended and running process
@@ -182,14 +186,10 @@ swapActiveSuspended() {
 		return 1
 	fi
 
-	read -r recentRunning recentSuspend <<< "$(getRecentProcessStates)"
+	read -r recentRunning recentSuspend _ <<< "$(getRecentProcessStates)"
 
 	suspendedProcessName=$(ps -p "$recentSuspend" -o args= | awk '{print $NF}')
 	runningProcessName=$(ps -p "$recentRunning" -o args= | awk '{print $NF}')
-
-	printf "%s\n" "Swapped processes. Now:"
-	printf "%23s  %7s  %s\n" "Suspended:" "$recentRunning" "$runningProcessName"
-	printf "%23s  %7s  %s\n" "Running:" "$recentSuspend" "$suspendedProcessName"
 
 	# Suspend the running process and resume the suspended process
 	kill -STOP "-$recentRunning"
@@ -322,18 +322,18 @@ while [ $# -gt 0 ]; do
 		exit
 		;;
 	--recent)
-		read -r recentRunning recentSuspend <<< "$(getRecentProcessStates)"
+		read -r recentRunning recentSuspend penultimateRunning <<< "$(getRecentProcessStates)"
 		runningProcessName=$(ps -p "$recentRunning" -o args= 2>/dev/null | awk '{print $NF}')
 		suspendedProcessName=$(ps -p "$recentSuspend" -o args= 2>/dev/null | awk '{print $NF}')
-		printf "%17s  %s\n" "recent Running:" "$runningProcessName"
+		penultimateRunningProcessName=$(ps -p "$penultimateRunning" -o args= 2>/dev/null | awk '{print $NF}')
+		printf "%17s  %s\n" "recent Run:" "$runningProcessName"
+		printf "%17s  %s\n" "penultimate Run:" "$penultimateRunningProcessName"
 		printf "%17s  %s\n" "recent Suspended:" "$suspendedProcessName"
 		exit
 		;;
 	--resume)
-		read -r recentRunning recentSuspend <<< "$(getRecentProcessStates)"
-		if [[ -n $recentSuspend ]]; then
-			kill -CONT "-$recentSuspend"
-		fi
+		read -r _ recentSuspend _ <<< "$(getRecentProcessStates)"
+		kill -CONT "-$recentSuspend"
 		exit
 		;;
 	-k | --killall)
@@ -358,8 +358,13 @@ while [ $# -gt 0 ]; do
 		exit
 		;;
 	-p | --pause)
-		read -r recentRunning recentSuspend <<< "$(getRecentProcessStates)"
+		read -r recentRunning _ _ <<< "$(getRecentProcessStates)"
 		kill -STOP "-$recentRunning"
+		exit
+		;;
+	-P | --pause-previous)
+		read -r _ _ penultimateRunning <<< "$(getRecentProcessStates)"
+		kill -STOP "-$penultimateRunning"
 		exit
 		;;
 	--swap)
