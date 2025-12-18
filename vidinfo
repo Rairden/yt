@@ -1,6 +1,5 @@
 #!/bin/bash
 
-
 startTime=$(date +%s.%N)
 script="$(basename "$0")"
 dbPath=$ytpath	# env var
@@ -25,12 +24,15 @@ usage() {
 
 	Options:
         -d, --duration <secs>   filter videos longer than <secs> seconds
+        -t, --tag               assign a tag to a username in the db
 
 	Requires: fd, mpv, mediainfo
 
 	Examples:
         $script peach
-        $script -d 600 peach	# videos longer than 600s (10 mins)
+        $script -d 600 peach    # videos longer than 600s (10 mins)
+        $script ''              # to populate an empty database
+        $script -t <tag> <usr>  # assign a tag to a username
         fd --changed-within=1m | $script
 DOC
 }
@@ -74,8 +76,19 @@ initDB() {
 	if [[ ! -f "$dbFile" ]]; then
 		sqlite3 "$dbFile" "
 		CREATE TABLE users (
-			username TEXT PRIMARY KEY,
-			note TEXT
+			username TEXT PRIMARY KEY
+		);
+
+		CREATE TABLE tags (
+			tag TEXT PRIMARY KEY
+		);
+
+		CREATE TABLE usertags (
+			username TEXT,
+			tag TEXT,
+			PRIMARY KEY (username, tag),
+			FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE,
+			FOREIGN KEY (tag) REFERENCES tags(tag) ON DELETE CASCADE
 		);
 
 		CREATE TABLE videos (
@@ -90,7 +103,8 @@ initDB() {
 			FOREIGN KEY (username) REFERENCES users(username)
 		);
 
-		-- Create an index on username for faster joins
+		CREATE INDEX idx_usertags_tag ON usertags(tag);
+		CREATE INDEX idx_usertags_username ON usertags(username);
 		CREATE INDEX idx_videos_username ON videos(username);
 		" 2>/dev/null
 	fi
@@ -152,10 +166,10 @@ processFile() {
 	local width=${resolution%x*}
 	local height=${resolution#*x}
 
-	sqlite3 "$dbFile" "insert or replace into users (username, note) values ('$username', NULL)" 2>/dev/null
+	sqlite3 "$dbFile" "insert or ignore into users (username) values ('$username')" 2>/dev/null
 
-	sqlite3 "$dbFile" "insert or replace into \
-		videos (hash, file, username, size, duration, width, height, metadata) \
+	sqlite3 "$dbFile" "insert or replace into
+		videos (hash, file, username, size, duration, width, height, metadata)
 		values ('$hash', '$video', '$username', $size, $dur, $width, $height, '$metadata')" 2>/dev/null
 
 	return $?
@@ -215,6 +229,33 @@ else
 			name=$(getName "$2")
 			findVideosByDuration "$dur" "$name"
 			break
+			;;
+		-t | --tag)
+			shift
+			if [[ $# -lt 2 ]]; then
+				echo -e "need at least: tag + one user\n"
+				usage
+				exit 1
+			fi
+			tag="$1"
+			shift
+
+			sqlite3 -batch "$dbFile" "insert or ignore into tags (tag) values ('$tag');"
+
+			while [[ $# -gt 0 ]]; do
+				user="$1"
+				sqlite3 -batch "$dbFile" "insert or ignore into users (username) values ('$user');"
+				rows=$(sqlite3 -batch -init /dev/null "$dbFile" \
+				"insert or ignore into usertags (username, tag) values ('$user', '$tag'); select changes();")
+
+				if ((rows == 1)); then
+					echo " added: $user -> $tag"
+				else
+					echo "exists: $user -> $tag"
+				fi
+				shift
+			done
+			exit
 			;;
 		-h | --help)
 			usage

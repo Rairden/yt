@@ -13,6 +13,8 @@ if [[ -f "$startTime" ]]; then
 	printf "%17s %02d:%02d\n" "uptime:" "$hours" "$minutes"
 fi
 
+printf "%17s %s\n" "pkgTemp:" "$(sensors | awk -F'[ +]+' '/Package id 0:/ {print $4; exit}')"
+
 yt --recent
 echo
 

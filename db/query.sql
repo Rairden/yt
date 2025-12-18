@@ -29,15 +29,6 @@ where height < 1080
 group by username, width
 order by videoCnt desc;
 
-select file from videos v
-	join users u on u.username = v.username
-where note = 'foo';
+select file, duration from videos order by rowid desc limit 10;
 
-select * from users where note = 'snaketattoo' limit 5;
-
-select count(*) from videos v
-    join users u on u.username = v.username
-where u.note = 'snaketattoo';
-
-select * from users
-where note not NULL;
+select changes();

@@ -1,5 +1,4 @@
 #!/bin/bash
-
 script="$(basename "$0")"
 url=
 resolution=
@@ -31,6 +30,7 @@ usage() {
         -k, --killall           kill all suspended processes
         -f, --forcekill         kill all processes w/out prompting
         -p, --pause             pause the most recent running process
+            --poweroff          kill all processes, then poweroff
             --pauseall          pause all running processes
         -g, --grep              search for running processes
         -d, --del               cleans up .temp files less than x hours old
@@ -348,7 +348,12 @@ while [ $# -gt 0 ]; do
 	-f | --forcekill)
 		if hasDiskSpace; then
 			suspended-control -p "$script"
-			suspended-control -k "$script" && exit 0 || exit 1
+			if suspended-control -k "$script"; then
+				fd -t f -e mp4 --changed-within=1m | vidinfo > /dev/null
+				exit 0
+			else
+				exit 1
+			fi
 		fi
 		exit
 		;;
@@ -364,6 +369,10 @@ while [ $# -gt 0 ]; do
 	-P | --pause-previous)
 		read -r _ _ penultimateRunning <<< "$(getRecentProcessStates)"
 		kill -STOP "-$penultimateRunning"
+		exit
+		;;
+	--poweroff)
+		$script -f && systemctl poweroff || (sleep 300; systemctl poweroff)
 		exit
 		;;
 	--swap)
