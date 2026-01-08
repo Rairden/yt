@@ -32,3 +32,21 @@ order by videoCnt desc;
 select file, duration from videos order by rowid desc limit 10;
 
 select changes();
+
+select count(*) from usertags where tag = 'snaketattoo';
+
+-- count usernames by their starting letter
+select
+	lower(substr(username, 1, 1)) as letter,
+	count(*) as cnt
+from users
+group by letter
+order by letter;
+
+-- count longest usernames
+select
+	length(username) as len,
+	username
+from users
+order by len desc
+limit 20;

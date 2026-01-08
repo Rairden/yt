@@ -26,4 +26,4 @@ echo
 
 # ytpath is an env var. Where you want files saved.
 # fd -e list -x sh -c 'echo -e "\033[33m$1\033[0m"; cat "$1" | tail -n +2; echo' _ {}		# works
-find "$ytpath" -type f -name "*.list" -exec sh -c 'echo -e "\033[33m$1\033[0m"; cat "$1" | tail -n +2; echo' _ {} \;
+find "$YTPATH" -type f -name "*.list" -exec sh -c 'echo -e "\033[33m$1\033[0m"; cat "$1" | tail -n +2; echo' _ {} \;

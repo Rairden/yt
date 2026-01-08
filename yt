@@ -1,4 +1,5 @@
 #!/bin/bash
+
 script="$(basename "$0")"
 url=
 resolution=
@@ -38,7 +39,7 @@ usage() {
         -c, --cookies           use cookies with a web browser (CAPTCHA, or login required)
         -b, --batch-file FILE   file containing URLs to download
         -r, --resolution        set the maximum resolution
-            --recent-pids       returns two pids [recentRunning recentSuspend]
+            --recent-pids       returns three pids [recentRunning penultimateRunning recentSuspend]
             --swap              swaps the most recently suspended and running process
 DOC
 }
@@ -140,8 +141,16 @@ batchDownload() {
 }
 
 requires() {
-	if ! command -v "$1" &>/dev/null; then
-		echo "Requires $1"
+	local missing=()
+	local cmd
+
+	for cmd in "$@"; do
+		command -v "$cmd" &>/dev/null || missing+=("$cmd")
+	done
+
+	if ((${#missing[@]} > 0)); then
+		echo "Missing required commands:"
+		printf '\t%s\n' "${missing[@]}"
 		exit 1
 	fi
 }
@@ -173,7 +182,7 @@ getRecentProcessStates() {
 
 	done < <(tac "$log" 2>/dev/null)
 
-	echo "${recentRunning:-0} ${recentSuspend:-0} ${penultimateRunning:-0}"
+	echo "${recentRunning:-0} ${penultimateRunning:-0} ${recentSuspend:-0}"
 }
 
 # Swaps the most recently suspended and running process
@@ -186,7 +195,7 @@ swapActiveSuspended() {
 		return 1
 	fi
 
-	read -r recentRunning recentSuspend _ <<< "$(getRecentProcessStates)"
+	read -r recentRunning _ recentSuspend <<< "$(getRecentProcessStates)"
 
 	suspendedProcessName=$(ps -p "$recentSuspend" -o args= | awk '{print $NF}')
 	runningProcessName=$(ps -p "$recentRunning" -o args= | awk '{print $NF}')
@@ -296,7 +305,7 @@ killProcess() {
 	fi
 }
 
-requires yt-dlp
+requires yt-dlp rg
 
 if [ $# -lt 1 ]; then
 	echo "Try '$script -h' for more information."
@@ -321,7 +330,7 @@ while [ $# -gt 0 ]; do
 		exit
 		;;
 	--recent)
-		read -r recentRunning recentSuspend penultimateRunning <<< "$(getRecentProcessStates)"
+		read -r recentRunning penultimateRunning recentSuspend <<< "$(getRecentProcessStates)"
 		runningProcessName=$(ps -p "$recentRunning" -o args= 2>/dev/null | awk '{print $NF}')
 		suspendedProcessName=$(ps -p "$recentSuspend" -o args= 2>/dev/null | awk '{print $NF}')
 		penultimateRunningProcessName=$(ps -p "$penultimateRunning" -o args= 2>/dev/null | awk '{print $NF}')
@@ -331,7 +340,7 @@ while [ $# -gt 0 ]; do
 		exit
 		;;
 	--resume)
-		read -r _ recentSuspend _ <<< "$(getRecentProcessStates)"
+		read -r _ _ recentSuspend <<< "$(getRecentProcessStates)"
 		kill -CONT "-$recentSuspend"
 		exit
 		;;
@@ -367,7 +376,7 @@ while [ $# -gt 0 ]; do
 		exit
 		;;
 	-P | --pause-previous)
-		read -r _ _ penultimateRunning <<< "$(getRecentProcessStates)"
+		read -r _ penultimateRunning _ <<< "$(getRecentProcessStates)"
 		kill -STOP "-$penultimateRunning"
 		exit
 		;;

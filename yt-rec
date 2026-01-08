@@ -4,7 +4,7 @@
 
 # Run with `yt-rec && exit`. ytpath is an env var. Where you want files saved.
 
-saveDir="$ytpath"
+saveDir="$YTPATH"
 tabsFromFile="/run/media/erik/storage/vuze/megaDL/konsole.txt"
 
 cmd=$1
@@ -37,9 +37,9 @@ for ((i = 1; i <= 19; i++)); do
 	konsole -p tabtitle="ch$i" --workdir="$saveDir" --new-tab -e "bash -c '{ sleep 0.1; xdotool type \"$cmd\" ;} & disown; exec zsh'"
 done
 
-konsole -p tabtitle="insert" --workdir="$saveDir" --new-tab -e "bash -c '{ sleep 0.1; xdotool type \"insert \" ;} & disown; exec zsh'"
-konsole -p tabtitle="fd" --workdir="$saveDir" --new-tab -e "bash -c '{ sleep 0.1; xdotool type \"fd \" ;} & disown; exec zsh'"
-konsole -p tabtitle="mpv" --workdir="$saveDir" --new-tab -e "bash -c '{ sleep 0.1; xdotool type \"mpv \" ;} & disown; exec zsh'"
 konsole -p tabtitle="vidinfo" --workdir="$saveDir" --new-tab -e "bash -c '{ sleep 0.1; xdotool type \"vidinfo \" ;} & disown; exec zsh'"
+konsole -p tabtitle="mpv" --workdir="$saveDir" --new-tab -e "bash -c '{ sleep 0.1; xdotool type \"mpv \" ;} & disown; exec zsh'"
+konsole -p tabtitle="fd" --workdir="$saveDir" --new-tab -e "bash -c '{ sleep 0.1; xdotool type \"fd \" ;} & disown; exec zsh'"
 konsole -p tabtitle="tmp" --workdir="$saveDir" --new-tab -e "bash -c '{ sleep 0.1; xdotool type \"yt --pauseall \" ;} & disown; exec zsh'"
+konsole -p tabtitle="tmp" --workdir="$saveDir" --new-tab -e "bash -c '{ sleep 0.1; } & disown; exec zsh'"
 konsole -p tabtitle='yt' --workdir="$saveDir" --new-tab -e "bash -c 'exit'"

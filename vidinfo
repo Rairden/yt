@@ -1,10 +1,10 @@
 #!/bin/bash
 
+args=("$@")
 startTime=$(date +%s.%N)
 script="$(basename "$0")"
-dbPath=$ytpath	# env var
+dbPath="${YTPATH:-.}"		# set the YTPATH env var
 dbFile="$dbPath/videos.db"
-ARGC=$#
 declare -a videos
 declare -a result
 declare -i cachedCnt=0
@@ -32,7 +32,9 @@ usage() {
         $script peach
         $script -d 600 peach    # videos longer than 600s (10 mins)
         $script ''              # to populate an empty database
-        $script -t <tag> <usr>  # assign a tag to a username
+        $script -t              # list all tags. Show DB schema
+        $script -t <usr>        # lookup all tags for a username (DB)
+        $script -t <tag> <usr>  # assign a tag to a username (DB)
         fd --changed-within=1m | $script
 DOC
 }
@@ -44,19 +46,34 @@ calcEndTime() {
 }
 
 requires() {
-	if ! command -v "$1" &>/dev/null; then
-		echo "Requires $1"
+	local missing=()
+	local cmd
+
+	for cmd in "$@"; do
+		command -v "$cmd" &>/dev/null || missing+=("$cmd")
+	done
+
+	if ((${#missing[@]} > 0)); then
+		echo "Missing required commands:"
+		printf '\t%s\n' "${missing[@]}"
 		exit 1
 	fi
 }
 
 retypeCMD() {
+	local interactiveShell
+	local opt=""
+
 	interactiveShell=$(ps -o comm= -p $PPID)
 
+	if [[ ${args[0]} == -* ]]; then
+		opt="${args[0]} "
+	fi
+
 	if [[ $interactiveShell == zsh ]]; then
-		{ sleep 0.1; xdotool type "$(basename ${BASH_SOURCE}) " ;} &
+		{ sleep 0.1; xdotool type "$(basename ${BASH_SOURCE}) $opt" ;} &
 	elif [[ $interactiveShell == bash ]]; then
-		xdotool type "$(basename ${BASH_SOURCE}) " &>/dev/null & disown
+		xdotool type "$(basename ${BASH_SOURCE}) $opt" &>/dev/null & disown
 	fi
 }
 
@@ -182,8 +199,6 @@ findVideos() {
 	# Check if the environment variable is set and not empty
 	if [[ -n "$VIDINFO_DIRS" ]]; then
 		IFS=':' read -r -a searchPaths <<< "$VIDINFO_DIRS"
-	else
-		searchPaths+=(".")
 	fi
 
 	mapfile -t videos < <(fd -e mp4 -t f "$name" "${searchPaths[@]}")
@@ -203,20 +218,85 @@ findVideosByDuration() {
 	done
 }
 
+handleTag() {
+	if [[ $# -eq  0 ]]; then
+		sqlite3 -init /dev/null "$dbFile" <<-'DOC'
+			select tag from tags;
+			.print
+			select sql from sqlite_master where type = 'table';
+		DOC
+
+		return
+	fi
+
+	if [[ $# -eq 1 ]]; then
+		user=$(getName "$1")
+		sqlite3 -batch "$dbFile" "select u.username, group_concat(ut.tag, ', ')
+			from users u
+			left join usertags ut on ut.username = u.username
+			where u.username like '%$user%'
+			group by u.username;"
+
+			echo
+			findVideos "$user"
+			return
+	fi
+
+	tag="$1"
+	shift
+
+	exists=$(sqlite3 -batch -init /dev/null "$dbFile" "select 1 from tags where tag = '$tag' limit 1")
+
+	if [[ -z "$exists" ]]; then
+		read -p "Tag '$tag' not found. Add it? [y,Y] " reply
+		echo
+		if [[ $reply =~ [yY] ]]; then
+			sqlite3 -batch -init /dev/null "$dbFile" "insert into tags (tag) values ('$tag');"
+			echo " added tag: $tag"
+		else
+			return
+		fi
+	fi
+
+	sqlite3 -batch -init /dev/null "$dbFile" "insert or ignore into tags (tag) values ('$tag');"
+
+	while [[ $# -gt 0 ]]; do
+		user=$(getName "$1")
+
+		sqlite3 -batch -init /dev/null "$dbFile" "insert or ignore into users (username) values ('$user');"
+
+		exists=$(sqlite3 -batch -init /dev/null "$dbFile" "select 1 from usertags where username = '$user' and tag = '$tag' limit 1;")
+
+		if [[ -n "$exists" ]]; then
+			echo "found: $user -> $tag"
+			shift
+			continue
+		fi
+
+		echo
+		read -p "Add '$user' to database? [y,Y] " reply
+		if [[ $reply =~ [yY] ]]; then
+			sqlite3 -batch -init /dev/null "$dbFile" "insert or ignore into usertags (username, tag) values ('$user', '$tag');"
+			echo -e "added: $user -> $tag"
+		fi
+		shift
+	done
+
+	echo
+}
+
 if [[ $# -eq 0 && -t 0 ]]; then
 	echo -e "Provide a regex or pipe input to the script.\n"
 	usage
 	exit 1
 fi
 
-requires fd
-requires mediainfo
-requires mpv
+requires fd mediainfo mpv
 trap retypeCMD EXIT
 
 initDB
 
-if [[ $ARGC -eq 0 && ! -t 0 ]]; then
+if [[ $# -eq 0 && ! -t 0 ]]; then
 	while IFS= read -r file; do
 		processVideo "$file"
 	done
@@ -232,30 +312,7 @@ else
 			;;
 		-t | --tag)
 			shift
-			if [[ $# -lt 2 ]]; then
-				echo -e "need at least: tag + one user\n"
-				usage
-				exit 1
-			fi
-			tag="$1"
-			shift
-
-			sqlite3 -batch "$dbFile" "insert or ignore into tags (tag) values ('$tag');"
-
-			while [[ $# -gt 0 ]]; do
-				user="$1"
-				sqlite3 -batch "$dbFile" "insert or ignore into users (username) values ('$user');"
-				rows=$(sqlite3 -batch -init /dev/null "$dbFile" \
-				"insert or ignore into usertags (username, tag) values ('$user', '$tag'); select changes();")
-
-				if ((rows == 1)); then
-					echo " added: $user -> $tag"
-				else
-					echo "exists: $user -> $tag"
-				fi
-				shift
-			done
-			exit
+			handleTag "$@"
 			;;
 		-h | --help)
 			usage
