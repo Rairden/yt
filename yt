@@ -140,8 +140,16 @@ batchDownload() {
 }
 
 requires() {
-	if ! command -v "$1" &>/dev/null; then
-		echo "Requires $1"
+	local missing=()
+	local cmd
+
+	for cmd in "$@"; do
+		command -v "$cmd" &>/dev/null || missing+=("$cmd")
+	done
+
+	if ((${#missing[@]} > 0)); then
+		echo "Missing required commands:"
+		printf '\t%s\n' "${missing[@]}"
 		exit 1
 	fi
 }
@@ -296,7 +304,7 @@ killProcess() {
 	fi
 }
 
-requires yt-dlp
+requires yt-dlp rg
 
 if [ $# -lt 1 ]; then
 	echo "Try '$script -h' for more information."
