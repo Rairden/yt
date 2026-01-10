@@ -1,5 +1,7 @@
 #!/bin/bash
 
+source "$(dirname "$0")/yt-common"
+
 script="$(basename "$0")"
 url=
 resolution=

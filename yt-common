@@ -1,0 +1,17 @@
+#!/bin/bash
+
+# set the YTPATH env var
+dbPath="${YTPATH:-.}"
+dbFile="$dbPath/videos.db"
+
+getName() {
+	local file=$1
+	if [[ $file =~ ^https?:// ]]; then
+		name=$(basename "$file")
+	else
+		name="${file#/}"
+		name="${name%/}"
+	fi
+
+	echo "$name"
+}

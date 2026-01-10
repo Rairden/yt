@@ -1,10 +1,9 @@
 #!/bin/bash
 
+source "$(dirname "$0")/yt-common"
+
 args=("$@")
 startTime=$(date +%s.%N)
-script="$(basename "$0")"
-dbPath="${YTPATH:-.}"		# set the YTPATH env var
-dbFile="$dbPath/videos.db"
 declare -a videos
 declare -a result
 declare -i cachedCnt=0
@@ -75,18 +74,6 @@ retypeCMD() {
 	elif [[ $interactiveShell == bash ]]; then
 		xdotool type "$(basename ${BASH_SOURCE}) $opt" &>/dev/null & disown
 	fi
-}
-
-getName() {
-	local file=$1
-	if [[ $file =~ ^https?:// ]]; then
-		name=$(basename "$file")
-	else
-		name="${file#/}"
-		name="${name%/}"
-	fi
-
-	echo "$name"
 }
 
 initDB() {
