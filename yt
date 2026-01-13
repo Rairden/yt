@@ -84,6 +84,27 @@ start() {
 }
 
 download() {
+	user=$(getName "$1")
+
+	IFS='|' read -r vidCnt avgDur <<< "$(sqlite3 "$dbFile" -batch -init /dev/null \
+		"select count(*), avg(duration) from videos where username = '$user'")"
+
+	labels=("Videos for $user:" "Avg length:")
+	max=0
+	for l in "${labels[@]}"; do
+		((${#l} > max)) && max=${#l}
+	done
+
+	printf "%*s %d\n" "$max" "${labels[0]}" "$vidCnt"
+
+	avgDur=${avgDur%.*} # strip decimals
+	if ((vidCnt > 0)); then
+		mm=$((avgDur / 60))
+		ss=$((avgDur % 60))
+		printf "%*s %02d:%02d\n" "$max" "${labels[1]}" $mm $ss
+	fi
+	echo
+
 	filename=$(yt-dlp --no-warnings --print filename -o "%(title)s.%(ext)s" "$url")
 	[ -z "$filename" ] && echo "filename not found" && exit 3
 
