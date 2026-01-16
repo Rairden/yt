@@ -77,40 +77,10 @@ retypeCMD() {
 }
 
 initDB() {
+	scriptDir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 	if [[ ! -f "$dbFile" ]]; then
-		sqlite3 "$dbFile" "
-		CREATE TABLE users (
-			username TEXT PRIMARY KEY
-		);
-
-		CREATE TABLE tags (
-			tag TEXT PRIMARY KEY
-		);
-
-		CREATE TABLE usertags (
-			username TEXT,
-			tag TEXT,
-			PRIMARY KEY (username, tag),
-			FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE,
-			FOREIGN KEY (tag) REFERENCES tags(tag) ON DELETE CASCADE
-		);
-
-		CREATE TABLE videos (
-			hash TEXT PRIMARY KEY,
-			file TEXT,
-			username TEXT,
-			size INTEGER,
-			duration INTEGER,
-			width INTEGER,
-			height INTEGER,
-			metadata TEXT,
-			FOREIGN KEY (username) REFERENCES users(username)
-		);
-
-		CREATE INDEX idx_usertags_tag ON usertags(tag);
-		CREATE INDEX idx_usertags_username ON usertags(username);
-		CREATE INDEX idx_videos_username ON videos(username);
-		" 2>/dev/null
+		sqlite3 "$dbFile" < "$scriptDir/db/schema.sql"
 	fi
 }
 
@@ -181,11 +151,14 @@ processFile() {
 
 findVideos() {
 	local name=$1
-	local searchPaths=()
+	local searchPaths=(".")
 
-	# Check if the environment variable is set and not empty
 	if [[ -n "$VIDINFO_DIRS" ]]; then
-		IFS=':' read -r -a searchPaths <<< "$VIDINFO_DIRS"
+		IFS=':' read -r -a dirs <<< "$VIDINFO_DIRS"
+		for path in "${dirs[@]}"; do
+			[[ $path == "$PWD" ]] && continue
+			searchPaths+=("$path")
+		done
 	fi
 
 	mapfile -t videos < <(fd -e mp4 -t f "$name" "${searchPaths[@]}")
