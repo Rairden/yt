@@ -67,3 +67,15 @@ F9
 F10
     ~/shellProjects/yt/yt --swap
 ```
+
+# database
+
+```
+export VIDINFO_DIRS=/run/media/erik/storage:/tmp/dir2
+export YTPATH=/home/erik/yt
+```
+
+Set your main working download dir to `YTPATH`. This is where the .db sqlite3 database file lives. And vidinfo accesses this file.  
+If your `YTPATH` env variable is not set, the .db file is made in every dir you run vidinfo from (if it finds one video or more).
+
+If you want `vidinfo` to search multiple paths, set your `VIDINFO_DIRS` environment variable. It accepts a colon-separated list of dirs of paths to search. Otherwise, vidinfo only searches the current dir.
